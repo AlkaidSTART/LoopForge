@@ -1,0 +1,45 @@
+name: Feature request
+description: Propose a user-facing LoopForge improvement
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the expected workflow from a user's perspective.
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - Shared behavior contract
+        - Classic edition
+        - Portable edition
+        - Installer / CLI
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: This proposal does not require organization-specific infrastructure or credentials.
+          required: true
+        - label: I searched existing issues and discussions for similar proposals.
+          required: true

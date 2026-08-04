@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "edition": "classic",
+  "host": "claude",
+  "generator": "scripts/build-classic-hosts.py"
+}

@@ -1,0 +1,152 @@
+# === multi-agents-devflow 默认配置 ===
+# 用户可在 .codebuddy/devflow.config.yaml 中部分覆写
+
+artifacts:
+  root_dir: "{project_root}/artifacts"
+
+e2e:
+  search_dirs:
+    - "e2e"
+    - "tests/e2e"
+    - "test/e2e"
+    - "__tests__/e2e"
+    - "tests/integration"
+
+# 运行模式
+solo:
+  auto_mode: true          # Solo 路径默认自动模式（跳过 manual 卡点）
+multi:
+  auto_mode: true          # 多 Agent 路径默认自动模式（brainstorming 后全流程自动）
+  # Token 优化（方案 2）：需求澄清完成后压缩 Main Agent 上下文，
+  # 丢弃 code-explorer 调研摘要 + brainstorming 对话历史（产物已落盘 requirement-report.md），
+  # 让派发循环从轻量上下文起步，避免一次性重上下文随 6+ 次派发反复重放。
+  compact_after_brainstorming: true
+
+# 手动模式门控（仅 auto_mode: false 时生效）
+# 配置哪些事件完成后需要暂停等待用户确认再继续
+# 用户可在 devflow.config.yaml 中覆写
+manual_gates:
+  - TASK-02_completed      # 技术方案完成后确认
+  - CODE-REVIEW_passed     # 代码审查通过后确认
+  - TASK-04_completed      # 测试完成后确认
+
+# 知识沉淀
+knowledge:
+  # 全局知识目录（跨需求可查阅）
+  global_dir: "{project_root}/artifacts/knowledge"
+  # 直接输出到 {global_dir}/{task_slug}.md
+
+# runtime_mode — 运行时模式，决定 Main Agent 如何派发子 agent
+#   固定值：ide — team-async 模式，team_create + send_message 异步常驻
+#   所有角色作为 team member 常驻，通过 send_message 通信
+#   写入 workflow-state.json 后全流程不可变
+runtime_mode: ide
+
+# 并行度上限（sub-developer 同时派发数不超过此值）
+max_parallel_sub_developers: 6
+
+# Routing Table（SSOT 唯一权威源，硬编码常量，不可被 devflow.config.yaml 覆写）
+# 其他文档（global.mdc §7.2 / leader.md §审核路由表 / start-workflow.md §阶段映射）
+# 均为本表的摘要引用，冲突时以本表为准。
+#
+# 流转模式：阶段完成 → 直接流转下一阶段（无 leader 门禁审核）
+# leader 仅在 medium/large 流程末尾做最终汇总；small 由 solo-developer 自行汇总
+# Phase 0 由 Main Agent 直接执行
+routing_table:
+  workflow_initialized_small: solo-developer
+  workflow_initialized_other: main               # Main Agent 执行需求分析+澄清（TASK-01）
+  # TASK-01 路径（需求分析+澄清）
+  TASK-01_completed: architect                   # 需求分析完成 → 直接流转 architect 执行 TASK-02
+  # SOLO 路径（最终汇总由 solo-developer 自行完成，完成后直接发 workflow_completed）
+  SOLO_failed: solo-developer
+  SOLO_overflow: main                            # 升级回退 → Main Agent 重新 Phase 0 判定
+  # Multi 路径：阶段完成 → 直接流转下一阶段执行角色
+  TASK-02_completed: developer                   # 方案完成 → 直接流转 developer 执行 TASK-03
+  TASK-02_failed: architect                      # architect 自身失败 → 重试
+  TASK-03_completed: code-reviewer               # 编码完成 → 直接流转 code-reviewer（越界+acceptance 校验合并为 CODE-REVIEW 前置步骤）
+  TASK-03_failed: developer                      # developer 自身失败 → 重试
+  CODE-REVIEW_passed: test-engineer              # 代码审查通过 → 直接流转 test-engineer 执行 TASK-04
+  CODE-REVIEW_failed: developer                  # code-reviewer 打回 → developer 修复
+  TASK-04_completed: knowledge-engineer          # 测试完成 → 直接流转 knowledge-engineer 执行 TASK-05
+  TASK-04_failed: test-engineer                  # test-engineer 自身失败 → 重试
+  TASK-05_completed: leader                      # 知识沉淀完成 → leader 生成最终汇总（不审核）
+  TASK-05_failed: knowledge-engineer             # knowledge-engineer 自身失败 → 重试
+  workflow_completed: main
+
+# ===== Auto-Dispatch Hook 配置 =====
+# PreToolUse hook 拦截 member 的 send_message，若 event 在 routing_table 中
+# 且 payload 含 dispatch_prompt，则用 modifiedInput 把 recipient 改为下游角色——
+# 消息直达下游，main 不被唤醒，省掉 main 的 LLM 往返 token。
+# 已验证：modifiedInput 对 send_message 生效（2026-07-14 实测）。
+auto_dispatch:
+  enabled: true
+  hook_script: ".codebuddy/hooks/devflow-auto-dispatch.py"
+  # 可自动派发的 *_completed 事件（其余回 main）
+  events:
+    - TASK-01_completed      # main 自己 brainstorming 后发出（此条仍走 main，因 main 是发送方）
+    - TASK-02_completed      # architect → developer
+    - TASK-03_completed      # developer → code-reviewer
+    - CODE-REVIEW_passed     # code-reviewer → test-engineer
+    - TASK-04_completed      # test-engineer → knowledge-engineer
+    - TASK-05_completed      # knowledge-engineer → leader
+  # 不可自动派发（仍回 main）：
+  # - *_failed（需 main 判断 retry_count）
+  # - manual_gates 事件（auto_mode=false 时需用户确认）
+  # - workflow_completed（需 main 执行清理 shutdown + team_delete）
+  # - SOLO_overflow（需 main 重新 Phase 0）
+
+# ===== 流程耗时优化建议（可选，非默认启用）=====
+# optimization_hints:
+#   1. CODE-REVIEW 与 TASK-04 并行：code-reviewer 和 test-engineer 同时启动
+#      - 前提：test-engineer 基于 change-report（而非 review-report）编写用例
+#      - 可减少 ~20% 串行等待，但 review 发现的问题可能导致测试返工
+#   2. 延迟 spawn：已回退。当前按 size_class 预 spawn（small → 1 角色；medium/large → 6 角色），
+#      调度循环中零 spawn；SOLO_overflow 升级时补 spawn 6 个 multi 角色。
+#   [已实施] 3. 合并门禁：TASK-03 门禁已合并到 CODE-REVIEW 前置校验
+#   [已实施] 4. 移除 leader 门禁审核：各阶段完成后直接流转下一阶段
+
+# ===== 全局 Agent 规则（spawn 时注入 prompt） =====
+# 所有 team member spawn 时，Main Agent 必须将以下内容追加到 prompt 参数中。
+# 这样只需维护此处一份，无需在每个 agent .md 文件中重复。
+global_agent_rules: |
+  【全局通信规则 ⭐⭐⭐】
+  1. 完成任务后，必须通过 send_message(recipient="main", ...) 汇报。
+  2. recipient 必须是字符串 "main"（team lead / Main Agent）。
+  3. ⚠️ 严禁发给 "leader"！"leader" 是另一个 team member 角色，不是 team lead。
+  4. ⚠️ 严禁发给任何其他 team member（禁止 member 间直接通信）。
+  5. 发错目标会导致工作流卡死，没有任何恢复机制。
+  6. 发送后自然结束本轮 turn，保持常驻等待下次唤醒。
+  7. ⚠️ 汇报消息 content 必须是完整 JSON（Rule G7.5 格式），务必带全 event、stage、
+     next_target（含 subagent_name）、workflow_state_path。这样 main 无需重读
+     workflow-state.json 即可派发（Token 优化方案 3 的硬前提，缺字段会迫使 main 全量回读）。
+  8. ⭐ Auto-Dispatch（Token 优化方案 4）：完成任务时，content JSON 必须额外携带
+     "dispatch_prompt" 字段——这是你为下游角色预组装的任务指令。格式要求：
+     - 以"你是 {下游角色名}，执行 {任务名}。"开头
+     - 列出下游需要读取的前序产物路径（如 01-requirement/requirement-report.md）
+     - 列出你作为本阶段执行者的关键约束/决策摘要（1-3 条，引用而非内联全文）
+     - 列出输出产物路径
+     hook 会拦截你的 send_message，若 event 可自动派发，则用 modifiedInput 把
+     recipient 改为下游角色并注入 dispatch_prompt——消息直达下游，main 不被唤醒。
+     缺 dispatch_prompt 时 hook 放行给 main，main 自行组装（兜底）。
+     示例：
+     "dispatch_prompt": "你是 developer，执行 TASK-03。\n需求报告：01-requirement/requirement-report.md\n技术方案：02-design/tech-design.md\n执行计划：02-design/execution-plan.md\n产物目录：03-code/\n关键约束：严格按 execution-plan.md 的 parallel_tasks 落地；存量公开接口签名保持不变。\n请先读上述文件，再按 execution-plan.md 落地代码。"
+
+# Team Members（按 size_class 分流预 spawn）
+team_members:
+  solo:
+    - solo-developer
+  multi:
+    - architect
+    - developer
+    - code-reviewer
+    - test-engineer
+    - knowledge-engineer
+    - leader
+
+# 依赖 Skills
+dependencies:
+  skills:
+    - brainstorming
+    - tech-design
+    - knowledge-distillation
+  mcp_tools: []

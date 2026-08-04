@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "edition": "classic",
+  "host": "cursor",
+  "generator": "scripts/build-classic-hosts.py"
+}
