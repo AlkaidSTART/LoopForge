@@ -7,8 +7,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
-from . import __version__
-from . import launch
+from . import __version__, launch
 from .core import (
     STATE_PATH, DevFlowError, apply_install, build_plan, doctor, status_rows, uninstall,
 )
