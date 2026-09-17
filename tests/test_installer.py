@@ -173,7 +173,7 @@ class InstallerTests(unittest.TestCase):
                 section = stripped
             elif section == "[project.scripts]" and "=" in stripped:
                 name, _, value = stripped.partition("=")
-                scripts[name.strip()] = value.strip()
+                scripts[name.strip()] = value.strip().strip("\"'")
         self.assertEqual("devflow_cli.cli:main", scripts.get("loopforge"))
         self.assertEqual(scripts["loopforge"], scripts.get("lf"))
 
